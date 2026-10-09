@@ -199,6 +199,7 @@ class DeskOps(QMainWindow):
         nav.addWidget(version)
 
         self.overview = OverviewPage()
+        self.diagnostics_result = self.overview.diagnostics_result
 
         self.cpu_value = self.overview.cpu_value
         self.mem_value = self.overview.mem_value
