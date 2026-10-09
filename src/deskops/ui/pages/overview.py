@@ -1,0 +1,180 @@
+from PySide6.QtCore import Qt
+
+import platform
+
+import pyqtgraph as pg
+
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+    QTableWidget,
+    QHeaderView,
+    QScrollArea,
+    QSizePolicy,
+)
+
+
+def make_card(title, value):
+    card = QFrame()
+    card.setObjectName("card")
+
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(10)
+
+    heading = QLabel(title)
+    heading.setObjectName("muted")
+
+    metric = QLabel(value)
+    metric.setObjectName("metric")
+
+    layout.addWidget(heading)
+    layout.addWidget(metric)
+
+    return card, metric
+
+
+class OverviewPage(QWidget):
+    """Página de visão geral do sistema."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        page = QVBoxLayout(content)
+        page.setContentsMargins(30, 28, 30, 28)
+        page.setSpacing(16)
+        scroll.setWidget(content)
+
+        title = QLabel("System Overview")
+        title.setStyleSheet(
+            "font-size: 25px; font-weight: 700;"
+        )
+
+        subtitle = QLabel(
+            f"{platform.system()} · Kernel {platform.release()}"
+        )
+        subtitle.setObjectName("muted")
+
+        page.addWidget(title)
+        page.addWidget(subtitle)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
+
+        card_cpu, self.cpu_value = make_card("CPU Usage", "--")
+        card_mem, self.mem_value = make_card("Memory Used", "--")
+        card_disk, self.disk_value = make_card("Disk Used", "--")
+
+        for card in (card_cpu, card_mem, card_disk):
+            cards.addWidget(card)
+
+        page.addLayout(cards)
+
+        pg.setConfigOptions(antialias=True)
+
+        self.cpu_plot = pg.PlotWidget(
+            title="CPU Usage — Last 60 Seconds"
+        )
+        self.cpu_plot.setYRange(0, 100)
+        self.cpu_plot.setLabel("left", "Usage", units="%")
+        self.cpu_plot.setLabel("bottom", "Sample", units="s")
+        self.cpu_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.cpu_curve = self.cpu_plot.plot(
+            pen=pg.mkPen("#91aaff", width=2)
+        )
+
+        self.memory_plot = pg.PlotWidget(
+            title="Memory Usage — Last 60 Seconds"
+        )
+        self.memory_plot.setYRange(0, 100)
+        self.memory_plot.setLabel("left", "Usage", units="%")
+        self.memory_plot.setLabel("bottom", "Sample", units="s")
+        self.memory_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.memory_curve = self.memory_plot.plot(
+            pen=pg.mkPen("#70d6a5", width=2)
+        )
+
+        self.cpu_plot.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.memory_plot.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+
+        self.cpu_plot.setMinimumHeight(200)
+        self.memory_plot.setMinimumHeight(200)
+
+        page.addWidget(self.cpu_plot)
+        page.addWidget(self.memory_plot)
+
+        self.status = QLabel("Monitoring system resources...")
+        self.status.setObjectName("muted")
+        self.status.setWordWrap(True)
+        page.addWidget(self.status)
+
+        self.diagnostics_result = QLabel(
+    "No diagnostic report yet. Run a scan when needed."
+            )
+        self.diagnostics_result.setWordWrap(True)
+        self.diagnostics_result.setMinimumHeight(80)    
+        self.diagnostics_result.setTextInteractionFlags(
+    Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+        self.diagnostics_result.setStyleSheet("""
+    QLabel {
+        background-color: #202938;
+        border: 1px solid #354258;
+        border-radius: 8px;
+        padding: 12px;
+        color: #e2e8f0;
+    }
+        """)
+        page.addWidget(self.diagnostics_result)
+
+        self.scan_button = QPushButton("Run System Diagnostics")
+        page.addWidget(self.scan_button)
+
+        self.export_button = QPushButton("Export JSON Report")
+        page.addWidget(self.export_button)
+
+        process_title = QLabel("Top Processes")
+        process_title.setStyleSheet(
+            "font-size: 18px; font-weight: 700;"
+        )
+        page.addWidget(process_title)
+
+        self.process_table = QTableWidget(0, 5)
+        self.process_table.setHorizontalHeaderLabels([
+            "PID",
+            "Process",
+            "CPU %",
+            "Memory %",
+            "User",
+        ])
+        self.process_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.process_table.setAlternatingRowColors(True)
+        self.process_table.setMinimumHeight(220)
+        self.process_table.setSortingEnabled(False)
+        page.addWidget(self.process_table)
+
+        self.refresh_button = QPushButton("Refresh Process List")
+        page.addWidget(self.refresh_button)
+
+        page.addStretch()

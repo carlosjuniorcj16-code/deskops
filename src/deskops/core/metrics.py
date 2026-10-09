@@ -71,3 +71,15 @@ def collect_diagnostics():
         "alerts": alerts,
     }
 
+
+def collect_metrics():
+    """Coleta métricas rápidas para o monitoramento contínuo."""
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    cpu = psutil.cpu_percent(interval=None)
+
+    return {
+        "cpu_percent": cpu,
+        "memory_percent": memory.percent,
+        "root_disk_percent": disk.percent,
+    }

@@ -1,6 +1,8 @@
+from deskops.core.metrics import (
+    collect_diagnostics,
+    collect_metrics,
+)
 from PySide6.QtCore import QObject, QRunnable, Signal
-
-from deskops.core.metrics import collect_diagnostics
 from deskops.core.processes import collect_top_processes
 
 
@@ -40,3 +42,17 @@ class DiagnosticsWorker(QRunnable):
         except Exception as error:
             self.signals.error.emit(str(error))
 
+
+class MetricsWorker(QRunnable):
+    """Atualiza métricas sem bloquear a interface gráfica."""
+
+    def __init__(self):
+        super().__init__()
+        self.signals = WorkerSignals()
+
+    def run(self):
+        try:
+            metrics = collect_metrics()
+            self.signals.finished.emit(metrics)
+        except Exception as error:
+            self.signals.error.emit(str(error))

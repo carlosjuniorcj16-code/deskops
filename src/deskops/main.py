@@ -5,7 +5,12 @@ import platform
 from pathlib import Path
 
 
-from deskops.workers import ProcessWorker, DiagnosticsWorker
+from deskops.workers import (
+    ProcessWorker,
+    DiagnosticsWorker,
+    MetricsWorker,
+)
+from deskops.ui.pages.overview import OverviewPage
 
 from collections import deque
 import pyqtgraph as pg
@@ -154,11 +159,10 @@ class DeskOps(QMainWindow):
 
         self.diagnostics_running = False
 
-        self.diagnostics_timer = QTimer(self)
-        self.diagnostics_timer.setInterval(1000)
-        self.diagnostics_timer.timeout.connect(
-            self.refresh_diagnostics
-        )
+
+        self.metrics_timer = QTimer(self)
+        self.metrics_timer.setInterval(2000)
+        self.metrics_timer.timeout.connect(self.refresh_metrics)
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -167,7 +171,6 @@ class DeskOps(QMainWindow):
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
 
-        # Sidebar
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(210)
@@ -182,11 +185,8 @@ class DeskOps(QMainWindow):
         nav.addSpacing(20)
 
         for name in [
-            "Overview",
-            "Hardware",
-            "Diagnostics",
-            "Reports",
-            "Settings",
+            "Overview", "Hardware", "Diagnostics",
+            "Reports", "Settings"
         ]:
             item = QLabel(name)
             item.setContentsMargins(8, 10, 8, 10)
@@ -198,137 +198,39 @@ class DeskOps(QMainWindow):
         version.setObjectName("muted")
         nav.addWidget(version)
 
-        # Main content with responsive scrolling
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.overview = OverviewPage()
 
-        content = QWidget()
-        page = QVBoxLayout(content)
-        page.setContentsMargins(30, 28, 30, 28)
-        page.setSpacing(16)
+        self.cpu_value = self.overview.cpu_value
+        self.mem_value = self.overview.mem_value
+        self.disk_value = self.overview.disk_value
 
-        title = QLabel("System Overview")
-        title.setStyleSheet(
-            "font-size: 25px; font-weight: 700;"
+        self.cpu_plot = self.overview.cpu_plot
+        self.memory_plot = self.overview.memory_plot
+        self.cpu_curve = self.overview.cpu_curve
+        self.memory_curve = self.overview.memory_curve
+
+        self.status = self.overview.status
+        self.process_table = self.overview.process_table
+
+        self.overview.scan_button.clicked.connect(
+            self.run_diagnostics
         )
-
-        subtitle = QLabel(
-            f"{platform.system()} · Kernel {platform.release()}"
+        self.overview.export_button.clicked.connect(
+            self.export_report
         )
-        subtitle.setObjectName("muted")
-
-        page.addWidget(title)
-        page.addWidget(subtitle)
-
-        # Metric cards
-        cards = QHBoxLayout()
-        cards.setSpacing(14)
-
-        card_cpu, self.cpu_value = make_card("CPU Usage", "--")
-        card_mem, self.mem_value = make_card("Memory Used", "--")
-        card_disk, self.disk_value = make_card("Disk Used", "--")
-
-        for card in [card_cpu, card_mem, card_disk]:
-            cards.addWidget(card)
-
-        page.addLayout(cards)
-
-        # Gráficos históricos
-        pg.setConfigOptions(antialias=True)
-
-        self.cpu_plot = pg.PlotWidget(title="CPU Usage — Last 60 Seconds")
-        self.cpu_plot.setYRange(0, 100)
-        self.cpu_plot.setLabel("left", "Usage", units="%")
-        self.cpu_plot.setLabel("bottom", "Sample", units="s")
-        self.cpu_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.cpu_curve = self.cpu_plot.plot(
-            pen=pg.mkPen("#91aaff", width=2)
+        self.overview.refresh_button.clicked.connect(
+            self.refresh_processes
         )
-
-        self.memory_plot = pg.PlotWidget(
-            title="Memory Usage — Last 60 Seconds"
-        )
-        self.memory_plot.setYRange(0, 100)
-        self.memory_plot.setLabel("left", "Usage", units="%")
-        self.memory_plot.setLabel("bottom", "Sample", units="s")
-        self.memory_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.memory_curve = self.memory_plot.plot(
-            pen=pg.mkPen("#70d6a5", width=2)
-        )
-
-        self.cpu_curve.setData([10, 25, 15, 40, 30, 60, 45])
-        self.memory_curve.setData([50, 52, 48, 55, 53, 65, 60])
-
-        self.cpu_plot.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding
-        )
-
-        self.memory_plot.setSizePolicy(
-          QSizePolicy.Policy.Expanding,
-          QSizePolicy.Policy.Expanding
-        )
-
-        page.addWidget(self.cpu_plot)
-        page.addWidget(self.memory_plot)
-
-        self.status = QLabel("Ready to inspect this system.")
-        self.status.setObjectName("muted")
-        self.status.setWordWrap(True)
-        page.addWidget(self.status)
-
-        # Diagnostic and export buttons
-        scan = QPushButton("Run System Diagnostics")
-        scan.clicked.connect(self.run_diagnostics)
-        page.addWidget(scan)
-
-        export = QPushButton("Export JSON Report")
-        export.clicked.connect(self.export_report)
-        page.addWidget(export)
-
-        # Process table
-        process_title = QLabel("Top Processes")
-        process_title.setStyleSheet(
-            "font-size: 18px; font-weight: 700;"
-        )
-        page.addWidget(process_title)
-
-        self.process_table = QTableWidget(0, 5)
-        self.process_table.setHorizontalHeaderLabels([
-            "PID",
-            "Process",
-            "CPU %",
-            "Memory %",
-            "User",
-        ])
-
-        self.process_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.process_table.setAlternatingRowColors(True)
-        self.process_table.setMinimumHeight(220)
-        self.process_table.setSortingEnabled(False)
-
-        page.addWidget(self.process_table)
-
-        refresh = QPushButton("Refresh Process List")
-        refresh.clicked.connect(self.refresh_processes)
-        page.addWidget(refresh)
-
-        page.addStretch()
-
-        scroll.setWidget(content)
 
         main.addWidget(sidebar)
-        main.addWidget(scroll, 1)
+        main.addWidget(self.overview, 1)
 
         # Initial data
-        self.run_diagnostics()
         self.refresh_processes()
-
-        self.diagnostics_timer.start()
         self.process_timer.start()
+
+        self.refresh_metrics()
+        self.metrics_timer.start()
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -437,6 +339,57 @@ class DeskOps(QMainWindow):
         )
 
 
+    def refresh_metrics(self):
+        if getattr(self, "metrics_running", False):
+            return
+
+        self.metrics_running = True
+
+        worker = MetricsWorker()
+        worker.signals.finished.connect(
+            self.on_metrics_ready
+        )
+        worker.signals.error.connect(
+            self.on_metrics_error
+        )
+
+        self.thread_pool.start(worker)
+
+    def on_metrics_ready(self, metrics):
+        self.metrics_running = False
+
+        self.cpu_value.setText(
+            f'{metrics["cpu_percent"]:.0f}%'
+        )
+        self.mem_value.setText(
+            f'{metrics["memory_percent"]:.0f}%'
+        )
+        self.disk_value.setText(
+            f'{metrics["root_disk_percent"]:.0f}%'
+        )
+
+        self.cpu_history.append(
+            float(metrics["cpu_percent"])
+        )
+        self.memory_history.append(
+            float(metrics["memory_percent"])
+        )
+
+        samples = list(range(len(self.cpu_history)))
+
+        self.cpu_curve.setData(
+            samples, list(self.cpu_history)
+        )
+        self.memory_curve.setData(
+            samples, list(self.memory_history)
+        )
+
+    def on_metrics_error(self, message):
+        self.metrics_running = False
+        self.status.setText(
+            f"Metrics update failed: {message}"
+        )
+
     def refresh_diagnostics(self):
         if self.diagnostics_running:
             return
@@ -457,7 +410,6 @@ class DeskOps(QMainWindow):
     def on_diagnostics_ready(self, report):
         self.diagnostics_running = False
         self.last_report = report
-
         metrics = report["metrics"]
 
         self.cpu_value.setText(
@@ -470,42 +422,41 @@ class DeskOps(QMainWindow):
             f'{metrics["root_disk_percent"]:.0f}%'
         )
 
-        warnings = sum(
-            alert["level"] == "warning"
+        warnings = [
+            alert for alert in report["alerts"]
+            if alert["level"] == "warning"
+        ]
+
+        heading = (
+            f"Diagnostics complete — {len(warnings)} warning(s) found."
+            if warnings else
+            "Diagnostics complete — no warnings found."
+        )
+
+        details = "\\n".join(
+            f'• {alert["message"]}'
             for alert in report["alerts"]
         )
 
-        if warnings:
-            summary = f"{warnings} warning(s) found."
-        else:
-            summary = "System metrics updated successfully."
+        timestamp = report.get("generated_at", "")
+        timestamp = timestamp[:19].replace("T", " ")
 
-        self.status.setText(
-            f"{summary} "
-            f'Uptime: {metrics["uptime_hours"]} hours.'
-        )
-
-        self.cpu_history.append(metrics["cpu_percent"])
-        self.memory_history.append(metrics["memory_percent"])
-
-        self.cpu_curve.setData(list(self.cpu_history))
-        self.memory_curve.setData(list(self.memory_history))
-
-        self.cpu_plot.setMinimumHeight(200)
-        self.memory_plot.setMinimumHeight(200)
+        self.diagnostics_result.setText(
+            f"{heading}\n"
+            f"{details}\n"
+            f'CPU: {metrics["cpu_percent"]:.1f}% | '
+            f'RAM: {metrics["memory_percent"]:.1f}% | '
+            f'Disk: {metrics["root_disk_percent"]:.1f}%\n'
+            f'Uptime: {metrics["uptime_hours"]} hours | '
+            f'Last check: {timestamp}'
+    )
 
         self.cpu_history.append(float(metrics["cpu_percent"]))
         self.memory_history.append(float(metrics["memory_percent"]))
 
-        self.cpu_curve.setData(
-            list(range(len(self.cpu_history))),
-            list(self.cpu_history),
-        )
-
-        self.memory_curve.setData(
-         list(range(len(self.memory_history))),
-          list(self.memory_history),
-        )   
+        samples = list(range(len(self.cpu_history)))
+        self.cpu_curve.setData(samples, list(self.cpu_history))
+        self.memory_curve.setData(samples, list(self.memory_history))
 
 
 
