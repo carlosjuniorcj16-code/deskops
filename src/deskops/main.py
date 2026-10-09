@@ -1,17 +1,16 @@
 
 import sys
 import json
-import time
 import platform
-from datetime import datetime
 from pathlib import Path
 
-import psutil
+
+from deskops.workers import ProcessWorker, DiagnosticsWorker
 
 from collections import deque
 import pyqtgraph as pg
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QThreadPool, QTimer
 
 from PySide6.QtGui import QShortcut, QKeySequence
 
@@ -109,169 +108,15 @@ def make_card(title, value):
     return card, metric
 
 
-def collect_diagnostics():
-    """Coleta métricas e gera alertas sem alterar o sistema."""
-    memory = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
-    cpu = psutil.cpu_percent(interval=1.0)
-
-    uptime_hours = int(
-        (time.time() - psutil.boot_time()) / 3600
-    )
-
-    alerts = []
-
-    if cpu >= 90:
-        alerts.append({
-            "level": "warning",
-            "message": f"Uso elevado de CPU: {cpu:.0f}%",
-        })
-
-    if memory.percent >= 90:
-        alerts.append({
-            "level": "warning",
-            "message": (
-                f"Memória quase cheia: {memory.percent:.0f}%"
-            ),
-        })
-
-    if disk.percent >= 90:
-        alerts.append({
-            "level": "warning",
-            "message": (
-                f"Pouco espaço livre na raiz: "
-                f"{disk.percent:.0f}% usado"
-            ),
-        })
-
-    if not alerts:
-        alerts.append({
-            "level": "ok",
-            "message": (
-                "Nenhum alerta automático encontrado "
-                "nas verificações básicas."
-            ),
-        })
-
-    return {
-        "generated_at": datetime.now().astimezone().isoformat(),
-        "system": {
-            "os": platform.system(),
-            "distribution": platform.platform(),
-            "kernel": platform.release(),
-            "architecture": platform.machine(),
-            "python_version": platform.python_version(),
-        },
-        "metrics": {
-            "cpu_percent": cpu,
-            "memory_percent": memory.percent,
-            "memory_total_bytes": memory.total,
-            "memory_available_bytes": memory.available,
-            "root_disk_percent": disk.percent,
-            "root_disk_total_bytes": disk.total,
-            "root_disk_free_bytes": disk.free,
-            "uptime_hours": uptime_hours,
-        },
-        "alerts": alerts,
-    }
 
 
 
-def collect_top_processes(limit=10):
-    """Retorna os processos com maior uso recente de CPU."""
-    processes = []
-
-    for proc in psutil.process_iter(
-        ["pid", "name", "username", "memory_percent"]
-    ):
-        try:
-            # Primeira amostra: inicializa o contador de CPU.
-            proc.cpu_percent(interval=None)
-
-            processes.append({
-                "process": proc,
-                "pid": proc.info["pid"],
-                "name": proc.info["name"] or "Unknown",
-                "username": proc.info["username"] or "Unknown",
-                "memory_percent": (
-                    proc.info["memory_percent"] or 0.0
-                ),
-            })
-
-        except (
-            psutil.NoSuchProcess,
-            psutil.AccessDenied,
-            psutil.ZombieProcess,
-        ):
-            continue
-
-    # Intervalo menor para uma atualização mais rápida.
-    time.sleep(0.5)
-
-    results = []
-
-    for item in processes:
-        try:
-            cpu_percent = item["process"].cpu_percent(
-                interval=None
-            )
-
-            results.append({
-                "pid": item["pid"],
-                "name": item["name"],
-                "username": item["username"],
-                "memory_percent": item["memory_percent"],
-                "cpu_percent": cpu_percent,
-            })
-
-        except (
-            psutil.NoSuchProcess,
-            psutil.AccessDenied,
-            psutil.ZombieProcess,
-        ):
-            continue
-
-    results.sort(
-        key=lambda process: process["cpu_percent"],
-        reverse=True,
-    )
-
-    return results[:limit]
 
 
-class WorkerSignals(QObject):
-    finished = Signal(object)
-    error = Signal(str)
 
 
-class ProcessWorker(QRunnable):
-    """Coleta processos sem bloquear a interface gráfica."""
-
-    def __init__(self):
-        super().__init__()
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            processes = collect_top_processes(limit=10)
-            self.signals.finished.emit(processes)
-        except Exception as error:
-            self.signals.error.emit(str(error))
 
 
-class DiagnosticsWorker(QRunnable):
-    """Executa os diagnósticos sem bloquear a interface."""
-
-    def __init__(self):
-        super().__init__()
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            report = collect_diagnostics()
-            self.signals.finished.emit(report)
-        except Exception as error:
-            self.signals.error.emit(str(error))
 
 class DeskOps(QMainWindow):
     def __init__(self):
