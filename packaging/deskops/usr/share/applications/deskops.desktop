@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=DeskOps
+Comment=Linux System Diagnostics
+Exec=deskops
+Terminal=false
+Categories=System;Monitor;
