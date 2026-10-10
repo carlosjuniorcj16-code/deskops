@@ -19,3 +19,12 @@ dist/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Ambientes virtuais e arquivos gerados
+.venv/
+build/
+dist/
+*.deb
+
+# Binários compilados do pacote Linux
+packaging/deskops/usr/lib/deskops/DeskOps/
