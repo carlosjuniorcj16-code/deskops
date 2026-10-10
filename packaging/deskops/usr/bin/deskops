@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/lib/deskops/DeskOps "$@"
+exec /usr/lib/deskops/DeskOps/DeskOps "$@"

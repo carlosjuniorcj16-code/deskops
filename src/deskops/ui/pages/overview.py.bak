@@ -1,0 +1,245 @@
+import platform
+
+import pyqtgraph as pg
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+    QTableWidget,
+    QHeaderView,
+    QScrollArea,
+    QSizePolicy,
+)
+
+
+def make_card(title, value, accent):
+    card = QFrame()
+    card.setObjectName("metricCard")
+
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(16, 13, 16, 13)
+    layout.setSpacing(7)
+
+    heading = QLabel(title.upper())
+    heading.setObjectName("metricHeading")
+
+    metric = QLabel(value)
+    metric.setObjectName("metric")
+    metric.setStyleSheet(f"color: {accent};")
+
+    layout.addWidget(heading)
+    layout.addWidget(metric)
+
+    return card, metric
+
+
+class OverviewPage(QWidget):
+    """Compact system-monitoring dashboard."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setObjectName("pageScroll")
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        content.setObjectName("pageContent")
+
+        page = QVBoxLayout(content)
+        page.setContentsMargins(24, 22, 24, 24)
+        page.setSpacing(16)
+        scroll.setWidget(content)
+
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(12)
+
+        heading_group = QVBoxLayout()
+        heading_group.setSpacing(4)
+
+        title = QLabel("System Overview")
+        title.setObjectName("pageTitle")
+
+        subtitle = QLabel(
+            f"{platform.system()} / Kernel {platform.release()}"
+        )
+        subtitle.setObjectName("muted")
+
+        heading_group.addWidget(title)
+        heading_group.addWidget(subtitle)
+        heading_row.addLayout(heading_group)
+        heading_row.addStretch()
+
+        self.status = QLabel("Monitoring system resources")
+        self.status.setObjectName("statusBadge")
+        heading_row.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        page.addLayout(heading_row)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(12)
+
+        card_cpu, self.cpu_value = make_card(
+            "CPU utilization", "--", "#91aaff"
+        )
+        card_mem, self.mem_value = make_card(
+            "Memory used", "--", "#70d6a5"
+        )
+        card_disk, self.disk_value = make_card(
+            "Root disk used", "--", "#e8bd78"
+        )
+
+        for card in (card_cpu, card_mem, card_disk):
+            cards.addWidget(card)
+
+        page.addLayout(cards)
+
+        pg.setConfigOptions(antialias=True)
+
+        self.cpu_plot = pg.PlotWidget()
+        self.memory_plot = pg.PlotWidget()
+
+        self._configure_plot(
+            self.cpu_plot, "CPU UTILIZATION", "#91aaff"
+        )
+        self._configure_plot(
+            self.memory_plot, "MEMORY UTILIZATION", "#70d6a5"
+        )
+
+        self.cpu_curve = self.cpu_plot.plot(
+            pen=pg.mkPen("#91aaff", width=2)
+        )
+        self.memory_curve = self.memory_plot.plot(
+            pen=pg.mkPen("#70d6a5", width=2)
+        )
+
+        charts = QHBoxLayout()
+        charts.setSpacing(12)
+        charts.addWidget(self._panel(self.cpu_plot), 1)
+        charts.addWidget(self._panel(self.memory_plot), 1)
+        page.addLayout(charts)
+
+        report_panel = QFrame()
+        report_panel.setObjectName("reportPanel")
+
+        report_layout = QVBoxLayout(report_panel)
+        report_layout.setContentsMargins(16, 13, 16, 13)
+        report_layout.setSpacing(8)
+
+        report_heading = QLabel("DIAGNOSTIC REPORT")
+        report_heading.setObjectName("sectionHeading")
+        report_layout.addWidget(report_heading)
+
+        self.diagnostics_result = QLabel(
+            "No report yet. Run system diagnostics when needed."
+        )
+        self.diagnostics_result.setObjectName("reportText")
+        self.diagnostics_result.setWordWrap(True)
+        self.diagnostics_result.setMinimumHeight(42)
+        self.diagnostics_result.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        report_layout.addWidget(self.diagnostics_result)
+
+        page.addWidget(report_panel)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+
+        self.scan_button = QPushButton("Run Diagnostics")
+        self.scan_button.setObjectName("primaryButton")
+
+        self.export_button = QPushButton("Export JSON")
+        self.export_button.setObjectName("secondaryButton")
+
+        self.refresh_button = QPushButton("Refresh Processes")
+        self.refresh_button.setObjectName("secondaryButton")
+
+        actions.addWidget(self.scan_button)
+        actions.addWidget(self.export_button)
+        actions.addStretch()
+        actions.addWidget(self.refresh_button)
+
+        page.addLayout(actions)
+
+        process_panel = QFrame()
+        process_panel.setObjectName("reportPanel")
+
+        process_layout = QVBoxLayout(process_panel)
+        process_layout.setContentsMargins(16, 13, 16, 14)
+        process_layout.setSpacing(10)
+
+        process_heading = QLabel("TOP PROCESSES")
+        process_heading.setObjectName("sectionHeading")
+        process_layout.addWidget(process_heading)
+
+        self.process_table = QTableWidget(0, 5)
+        self.process_table.setObjectName("processTable")
+        self.process_table.setHorizontalHeaderLabels([
+            "PID", "Process", "CPU %", "Memory %", "User"
+        ])
+
+        self.process_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.process_table.verticalHeader().setVisible(False)
+        self.process_table.verticalHeader().setDefaultSectionSize(32)
+        self.process_table.setAlternatingRowColors(True)
+        self.process_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.process_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.process_table.setShowGrid(False)
+        self.process_table.setMinimumHeight(260)
+        self.process_table.setSortingEnabled(False)
+
+        process_layout.addWidget(self.process_table)
+        page.addWidget(process_panel)
+
+        page.addStretch()
+
+    @staticmethod
+    def _configure_plot(plot, title, accent):
+        plot.setBackground("#171c27")
+        plot.setMinimumHeight(175)
+        plot.setMaximumHeight(225)
+        plot.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+
+        plot.setTitle(title, color="#dce3f0", size="10pt")
+        plot.setYRange(0, 100)
+        plot.setLabel("left", "Usage", units="%")
+        plot.setLabel("bottom", "Sample")
+        plot.showGrid(x=True, y=True, alpha=0.16)
+        plot.setMenuEnabled(False)
+        plot.setMouseEnabled(x=False, y=False)
+
+        for axis_name in ("left", "bottom"):
+            axis = plot.getAxis(axis_name)
+            axis.setPen("#3a4354")
+            axis.setTextPen("#929db1")
+
+    @staticmethod
+    def _panel(widget):
+        panel = QFrame()
+        panel.setObjectName("chartPanel")
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.addWidget(widget)
+
+        return panel

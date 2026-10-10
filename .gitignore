@@ -1,7 +1,21 @@
-.venv/
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build e empacotamento
 build/
 dist/
-*.egg-info/
-.pytest_cache/
+*.spec.bak
+*.deb
+*.deb.bak
+
+# Ferramentas e editores
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db

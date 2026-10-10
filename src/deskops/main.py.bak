@@ -5,12 +5,17 @@ import platform
 from pathlib import Path
 
 
-from deskops.workers import ProcessWorker, DiagnosticsWorker
+from deskops.workers import (
+    ProcessWorker,
+    DiagnosticsWorker,
+    MetricsWorker,
+)
+from deskops.ui.pages.overview import OverviewPage
 
 from collections import deque
 import pyqtgraph as pg
 
-from PySide6.QtCore import QThreadPool, QTimer
+from PySide6.QtCore import QThreadPool, QTimer, Qt
 
 from PySide6.QtGui import QShortcut, QKeySequence
 
@@ -29,61 +34,173 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QScrollArea,
+    QStackedWidget,
     QSizePolicy,
 )
 
 STYLE = """
 QMainWindow, QWidget {
-    background-color: #111318;
-    color: #e8eaf0;
-    font-family: Sans Serif;
-    font-size: 13px;
+    background-color: #0c1018;
+    color: #e5eaf3;
+    font-family: "Sans Serif";
+    font-size: 12px;
 }
+
+QWidget#pageContent {
+    background-color: #0c1018;
+}
+
+QScrollArea#pageScroll {
+    border: none;
+    background-color: #0c1018;
+}
+
 QFrame#sidebar {
-    background-color: #191c23;
-    border-right: 1px solid #2a2e38;
+    background-color: #151a24;
+    border-right: 1px solid #292f3d;
 }
+
 QLabel#brand {
-    font-size: 21px;
+    font-size: 22px;
     font-weight: 700;
-    color: #91aaff;
+    color: #a5b4fc;
 }
+
 QLabel#muted {
-    color: #969eae;
+    color: #8e9aaf;
+    font-size: 11px;
 }
+
+QLabel#pageTitle {
+    color: #f1f5fb;
+    font-size: 25px;
+    font-weight: 700;
+}
+
+QLabel#metricHeading {
+    color: #929db1;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
 QLabel#metric {
     font-size: 27px;
+    font-weight: 700;
+}
+
+QFrame#metricCard,
+QFrame#chartPanel,
+QFrame#reportPanel {
+    background-color: #141b27;
+    border: 1px solid #273247;
+    border-radius: 10px;
+}
+
+QLabel#sectionHeading {
+    color: #aab6ca;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+QLabel#statusBadge {
+    background-color: #1c302c;
+    color: #8be0b2;
+    border: 1px solid #2b4a40;
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 10px;
     font-weight: 600;
 }
-QFrame#card {
-    background-color: #1b1f28;
-    border: 1px solid #303541;
-    border-radius: 12px;
-}
-QPushButton {
-    background-color: #7595ff;
-    color: #101522;
-    border: none;
+
+QLabel#reportText {
+    color: #d1d9e7;
+    background-color: #151b26;
+    border: 1px solid #293345;
     border-radius: 7px;
-    padding: 10px 14px;
+    padding: 10px;
+    font-size: 11px;
+}
+
+QPushButton {
+    border-radius: 7px;
+    padding: 9px 13px;
+    font-size: 11px;
     font-weight: 600;
 }
-QPushButton:hover {
-    background-color: #91aaff;
+
+QPushButton#primaryButton {
+    background-color: #526ff5;
+    color: #ffffff;
+    border: 1px solid #7189ff;
 }
-QTableWidget {
-    background-color: #191c23;
-    alternate-background-color: #1b1f28;
-    color: #e8eaf0;
-    border: 1px solid #303541;
-    gridline-color: #303541;
-    selection-background-color: #35466e;
+
+QPushButton#primaryButton:hover {
+    background-color: #6882ff;
 }
-QHeaderView::section {
-    background-color: #252a35;
-    color: #e8eaf0;
-    padding: 7px;
+
+QPushButton#primaryButton:pressed {
+    background-color: #4059d6;
+}
+
+QPushButton#secondaryButton {
+    background-color: #202735;
+    color: #dce4f2;
+    border: 1px solid #354055;
+}
+
+QPushButton#secondaryButton:hover {
+    background-color: #293346;
+    border-color: #53627e;
+}
+
+QTableWidget#processTable {
+    background-color: #171d28;
+    alternate-background-color: #1b2230;
+    color: #dce4f2;
+    border: 1px solid #2b3444;
+    border-radius: 7px;
+    gridline-color: transparent;
+    selection-background-color: #303e61;
+    selection-color: #ffffff;
+    outline: none;
+}
+
+QTableWidget#processTable::item {
+    padding: 5px;
     border: none;
+}
+
+QHeaderView::section {
+    background-color: #202735;
+    color: #9eabc0;
+    padding: 9px 7px;
+    border: none;
+    border-bottom: 1px solid #354055;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QScrollBar:vertical {
+    background-color: #11151d;
+    width: 9px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #394357;
+    min-height: 28px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #52617b;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
 }
 """
 
@@ -124,212 +241,337 @@ class DeskOps(QMainWindow):
 
         self.setWindowTitle("DeskOps")
         screen = QApplication.primaryScreen().availableGeometry()
-
-        self.resize(
-            min(1100, screen.width()),
-            min(760, screen.height())
-        )
-
-        self.setMinimumSize(700, 500)
-
-        #self.fullscreen_shortcut = QShortcut(
-         #QKeySequence("F11"),
-         #self
-        #)
-        #self.fullscreen_shortcut.activated.connect(
-            #self.toggle_fullscreen
-        #)       
+        self.resize(min(1240, screen.width()), min(850, screen.height()))
+        self.setMinimumSize(760, 560)
 
         self.last_report = None
-
         self.cpu_history = deque(maxlen=60)
         self.memory_history = deque(maxlen=60)
-
         self.thread_pool = QThreadPool.globalInstance()
         self.process_scan_running = False
+        self.diagnostics_running = False
+        self.metrics_running = False
 
         self.process_timer = QTimer(self)
         self.process_timer.setInterval(2000)
         self.process_timer.timeout.connect(self.refresh_processes)
 
-        self.diagnostics_running = False
-
-        self.diagnostics_timer = QTimer(self)
-        self.diagnostics_timer.setInterval(1000)
-        self.diagnostics_timer.timeout.connect(
-            self.refresh_diagnostics
-        )
+        self.metrics_timer = QTimer(self)
+        self.metrics_timer.setInterval(2000)
+        self.metrics_timer.timeout.connect(self.refresh_metrics)
 
         root = QWidget()
+        root.setStyleSheet("background-color: #0c1018;")
         self.setCentralWidget(root)
 
         main = QHBoxLayout(root)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
 
-        # Sidebar
+        # Navigation rail
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(210)
+        sidebar.setFixedWidth(218)
+        sidebar.setStyleSheet("""
+            QFrame#sidebar {
+                background: #101620;
+                border-right: 1px solid #253044;
+            }
+            QLabel { background: transparent; }
+            QPushButton#navButton {
+                text-align: left;
+                padding: 12px 13px;
+                border: 1px solid transparent;
+                border-radius: 9px;
+                background: transparent;
+                color: #94a1b7;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton#navButton:hover {
+                background: #192334;
+                color: #e8efff;
+            }
+            QPushButton#navButton:checked {
+                background: #202d47;
+                color: #a9bdff;
+                border: 1px solid #34476d;
+            }
+        """)
 
         nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(20, 24, 20, 20)
-        nav.setSpacing(14)
+        nav.setContentsMargins(15, 22, 15, 17)
+        nav.setSpacing(7)
+
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+
+        brand_mark = QLabel("D")
+        brand_mark.setFixedSize(37, 37)
+        brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_mark.setStyleSheet("""
+            color: #101624;
+            background: #9bb0ff;
+            border-radius: 11px;
+            font-size: 22px;
+            font-weight: 900;
+        """)
+
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(1)
 
         brand = QLabel("DeskOps")
-        brand.setObjectName("brand")
-        nav.addWidget(brand)
-        nav.addSpacing(20)
+        brand.setStyleSheet(
+            "color: #f0f4ff; font-size: 18px; font-weight: 800;"
+        )
+        brand_subtitle = QLabel("LINUX SYSTEM TOOLS")
+        brand_subtitle.setStyleSheet(
+            "color: #72819a; font-size: 8px; font-weight: 700;"
+            " letter-spacing: 1px;"
+        )
 
-        for name in [
-            "Overview",
+        brand_text.addWidget(brand)
+        brand_text.addWidget(brand_subtitle)
+        brand_row.addWidget(brand_mark)
+        brand_row.addLayout(brand_text)
+        brand_row.addStretch()
+        nav.addLayout(brand_row)
+        nav.addSpacing(31)
+
+        nav_label = QLabel("WORKSPACE")
+        nav_label.setStyleSheet(
+            "color: #66758e; font-size: 9px; font-weight: 800;"
+            " letter-spacing: 1.5px; padding: 0 10px 7px;"
+        )
+        nav.addWidget(nav_label)
+
+        self.pages = QStackedWidget()
+        self.pages.setStyleSheet(
+            "QStackedWidget { background: #0c1018; border: none; }"
+        )
+
+        self.overview = OverviewPage()
+        self.pages.addWidget(self.overview)
+
+        def build_page(title, subtitle, entries, action_text=None,
+                       action_callback=None):
+            page = QWidget()
+            page.setStyleSheet("""
+                QWidget { background: #0c1018; color: #e7edf8; }
+                QFrame#infoCard {
+                    background: #141b27;
+                    border: 1px solid #29364a;
+                    border-radius: 12px;
+                }
+            """)
+
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(32, 30, 32, 30)
+            layout.setSpacing(17)
+
+            eyebrow = QLabel("DESKOPS  /  SYSTEM TOOLS")
+            eyebrow.setStyleSheet(
+                "color: #91aaff; font-size: 9px; font-weight: 800;"
+                " letter-spacing: 2px;"
+            )
+
+            heading = QLabel(title)
+            heading.setStyleSheet(
+                "color: #f0f4ff; font-size: 28px; font-weight: 800;"
+            )
+
+            description = QLabel(subtitle)
+            description.setWordWrap(True)
+            description.setStyleSheet(
+                "color: #8d9bb1; font-size: 12px;"
+            )
+
+            layout.addWidget(eyebrow)
+            layout.addWidget(heading)
+            layout.addWidget(description)
+            layout.addSpacing(7)
+
+            value_labels = []
+
+            for entry_title, entry_value in entries:
+                card = QFrame()
+                card.setObjectName("infoCard")
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(19, 16, 19, 17)
+                card_layout.setSpacing(8)
+
+                key = QLabel(entry_title.upper())
+                key.setStyleSheet(
+                    "color: #91a2bd; font-size: 9px;"
+                    " font-weight: 800; letter-spacing: 1px;"
+                )
+
+                value = QLabel(entry_value)
+                value.setWordWrap(True)
+                value.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                value.setStyleSheet(
+                    "color: #dce5f5; font-size: 12px;"
+                )
+
+                card_layout.addWidget(key)
+                card_layout.addWidget(value)
+                layout.addWidget(card)
+                value_labels.append(value)
+
+            if action_text and action_callback:
+                button = QPushButton(action_text)
+                button.setObjectName("primaryButton")
+                button.setMaximumWidth(230)
+                button.clicked.connect(action_callback)
+                layout.addWidget(button)
+
+            layout.addStretch()
+            return page, value_labels
+
+        hardware_page, _ = build_page(
             "Hardware",
+            "A quick view of the environment running DeskOps.",
+            [
+                ("Operating system",
+                 f"{platform.system()} {platform.release()}"),
+                ("Architecture", platform.machine()),
+                ("Processor", platform.processor() or
+                 "Processor identification unavailable"),
+                ("Python runtime", platform.python_version()),
+                ("Resource monitoring",
+                 "CPU, memory and root filesystem utilization are "
+                 "collected by the background monitoring worker."),
+            ],
+        )
+        self.pages.addWidget(hardware_page)
+
+        diagnostics_page, diagnostics_labels = build_page(
             "Diagnostics",
+            "Run an on-demand scan and review the latest system findings.",
+            [
+                ("Scan status", "No diagnostic scan has been run yet."),
+            ],
+            "Run diagnostics",
+            self.run_diagnostics,
+        )
+        self.secondary_report_label = diagnostics_labels[0]
+        self.secondary_report_label.setMinimumHeight(190)
+        self.secondary_report_label.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
+        self.secondary_report_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.pages.addWidget(diagnostics_page)
+
+        reports_page, reports_labels = build_page(
             "Reports",
+            "Diagnostic reports can be exported as JSON for later review.",
+            [
+                ("Latest report", "Run diagnostics to generate a report."),
+                ("Export format", "JSON · UTF-8 · Structured report data"),
+            ],
+            "Export latest report",
+            self.export_report,
+        )
+        self.reports_status_label = reports_labels[0]
+        self.pages.addWidget(reports_page)
+
+        settings_page, _ = build_page(
             "Settings",
-        ]:
-            item = QLabel(name)
-            item.setContentsMargins(8, 10, 8, 10)
-            nav.addWidget(item)
+            "DeskOps runtime information and current behavior.",
+            [
+                ("Refresh interval", "Metrics and process scans: 2 seconds"),
+                ("Interface", "Dark theme · Compact desktop layout"),
+                ("Data handling",
+                 "Reports are saved only when you choose an export path."),
+                ("Application version", "DeskOps 0.3 · Development build"),
+            ],
+        )
+        self.pages.addWidget(settings_page)
+
+        nav_items = [
+            ("◈", "Overview"),
+            ("▦", "Hardware"),
+            ("⌁", "Diagnostics"),
+            ("≡", "Reports"),
+            ("⚙", "Settings"),
+        ]
+
+        self.nav_buttons = []
+        for index, (symbol, name) in enumerate(nav_items):
+            button = QPushButton(f"   {symbol}     {name}")
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(43)
+            button.setChecked(index == 0)
+            button.clicked.connect(
+                lambda checked=False, i=index: self.navigate(i)
+            )
+            nav.addWidget(button)
+            self.nav_buttons.append(button)
 
         nav.addStretch()
 
-        version = QLabel("Linux Diagnostics · 0.3")
-        version.setObjectName("muted")
-        nav.addWidget(version)
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("color: #253044;")
+        nav.addWidget(divider)
 
-        # Main content with responsive scrolling
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content = QWidget()
-        page = QVBoxLayout(content)
-        page.setContentsMargins(30, 28, 30, 28)
-        page.setSpacing(16)
-
-        title = QLabel("System Overview")
-        title.setStyleSheet(
-            "font-size: 25px; font-weight: 700;"
+        footer_title = QLabel("LOCAL MONITOR")
+        footer_title.setStyleSheet(
+            "color: #8b9ab2; font-size: 9px; font-weight: 800;"
+            " letter-spacing: 1px;"
+        )
+        footer_status = QLabel("●  Background workers enabled")
+        footer_status.setStyleSheet(
+            "color: #72d9ae; font-size: 10px; padding-top: 5px;"
+        )
+        footer_version = QLabel("DESKOPS 0.3 · DEVELOPMENT")
+        footer_version.setStyleSheet(
+            "color: #526078; font-size: 8px; padding-top: 7px;"
         )
 
-        subtitle = QLabel(
-            f"{platform.system()} · Kernel {platform.release()}"
-        )
-        subtitle.setObjectName("muted")
+        nav.addWidget(footer_title)
+        nav.addWidget(footer_status)
+        nav.addWidget(footer_version)
 
-        page.addWidget(title)
-        page.addWidget(subtitle)
+        self.cpu_value = self.overview.cpu_value
+        self.mem_value = self.overview.mem_value
+        self.disk_value = self.overview.disk_value
+        self.cpu_plot = self.overview.cpu_plot
+        self.memory_plot = self.overview.memory_plot
+        self.cpu_curve = self.overview.cpu_curve
+        self.memory_curve = self.overview.memory_curve
+        self.status = self.overview.status
+        self.process_table = self.overview.process_table
+        self.diagnostics_result = self.overview.diagnostics_result
 
-        # Metric cards
-        cards = QHBoxLayout()
-        cards.setSpacing(14)
-
-        card_cpu, self.cpu_value = make_card("CPU Usage", "--")
-        card_mem, self.mem_value = make_card("Memory Used", "--")
-        card_disk, self.disk_value = make_card("Disk Used", "--")
-
-        for card in [card_cpu, card_mem, card_disk]:
-            cards.addWidget(card)
-
-        page.addLayout(cards)
-
-        # Gráficos históricos
-        pg.setConfigOptions(antialias=True)
-
-        self.cpu_plot = pg.PlotWidget(title="CPU Usage — Last 60 Seconds")
-        self.cpu_plot.setYRange(0, 100)
-        self.cpu_plot.setLabel("left", "Usage", units="%")
-        self.cpu_plot.setLabel("bottom", "Sample", units="s")
-        self.cpu_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.cpu_curve = self.cpu_plot.plot(
-            pen=pg.mkPen("#91aaff", width=2)
-        )
-
-        self.memory_plot = pg.PlotWidget(
-            title="Memory Usage — Last 60 Seconds"
-        )
-        self.memory_plot.setYRange(0, 100)
-        self.memory_plot.setLabel("left", "Usage", units="%")
-        self.memory_plot.setLabel("bottom", "Sample", units="s")
-        self.memory_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.memory_curve = self.memory_plot.plot(
-            pen=pg.mkPen("#70d6a5", width=2)
-        )
-
-        self.cpu_curve.setData([10, 25, 15, 40, 30, 60, 45])
-        self.memory_curve.setData([50, 52, 48, 55, 53, 65, 60])
-
-        self.cpu_plot.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding
-        )
-
-        self.memory_plot.setSizePolicy(
-          QSizePolicy.Policy.Expanding,
-          QSizePolicy.Policy.Expanding
-        )
-
-        page.addWidget(self.cpu_plot)
-        page.addWidget(self.memory_plot)
-
-        self.status = QLabel("Ready to inspect this system.")
-        self.status.setObjectName("muted")
-        self.status.setWordWrap(True)
-        page.addWidget(self.status)
-
-        # Diagnostic and export buttons
-        scan = QPushButton("Run System Diagnostics")
-        scan.clicked.connect(self.run_diagnostics)
-        page.addWidget(scan)
-
-        export = QPushButton("Export JSON Report")
-        export.clicked.connect(self.export_report)
-        page.addWidget(export)
-
-        # Process table
-        process_title = QLabel("Top Processes")
-        process_title.setStyleSheet(
-            "font-size: 18px; font-weight: 700;"
-        )
-        page.addWidget(process_title)
-
-        self.process_table = QTableWidget(0, 5)
-        self.process_table.setHorizontalHeaderLabels([
-            "PID",
-            "Process",
-            "CPU %",
-            "Memory %",
-            "User",
-        ])
-
-        self.process_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.process_table.setAlternatingRowColors(True)
-        self.process_table.setMinimumHeight(220)
-        self.process_table.setSortingEnabled(False)
-
-        page.addWidget(self.process_table)
-
-        refresh = QPushButton("Refresh Process List")
-        refresh.clicked.connect(self.refresh_processes)
-        page.addWidget(refresh)
-
-        page.addStretch()
-
-        scroll.setWidget(content)
+        self.overview.scan_button.clicked.connect(self.run_diagnostics)
+        self.overview.export_button.clicked.connect(self.export_report)
+        self.overview.refresh_button.clicked.connect(self.refresh_processes)
 
         main.addWidget(sidebar)
-        main.addWidget(scroll, 1)
+        main.addWidget(self.pages, 1)
 
-        # Initial data
-        self.run_diagnostics()
+        # Cursor de mãozinha em todos os botões da janela.
+        for button in self.findChildren(QPushButton):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+
         self.refresh_processes()
-
-        self.diagnostics_timer.start()
         self.process_timer.start()
+        self.refresh_metrics()
+        self.metrics_timer.start()
 
+    def navigate(self, index):
+        if 0 <= index < self.pages.count():
+            self.pages.setCurrentIndex(index)
+            for i, button in enumerate(self.nav_buttons):
+                button.setChecked(i == index)
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showMaximized()
@@ -342,7 +584,8 @@ class DeskOps(QMainWindow):
 
     def on_diagnostics_error(self, message):
         self.diagnostics_running = False
-        self.status.setText(
+        self.status.setText("●  SCAN FAILED")
+        self.secondary_report_label.setText(
             f"Could not complete diagnostics: {message}"
         )
 
@@ -394,7 +637,7 @@ class DeskOps(QMainWindow):
             return
 
         self.process_scan_running = True
-        self.status.setText("Collecting process information...")
+        self.status.setText("●  SCANNING")
 
         worker = ProcessWorker()
         worker.signals.finished.connect(self.on_processes_ready)
@@ -424,18 +667,65 @@ class DeskOps(QMainWindow):
                     QTableWidgetItem(value),
                 )
 
-        self.status.setText(
-            f"Process scan complete: {len(processes)} "
-            "processes displayed."
-        )
+        self.status.setText("●  MONITORING")
 
 
     def on_processes_error(self, message):
         self.process_scan_running = False
-        self.status.setText(
+        self.status.setText("●  PROCESS ERROR")
+        self.secondary_report_label.setText(
             f"Could not inspect processes: {message}"
         )
 
+
+    def refresh_metrics(self):
+        if getattr(self, "metrics_running", False):
+            return
+
+        self.metrics_running = True
+
+        worker = MetricsWorker()
+        worker.signals.finished.connect(
+            self.on_metrics_ready
+        )
+        worker.signals.error.connect(
+            self.on_metrics_error
+        )
+
+        self.thread_pool.start(worker)
+
+    def on_metrics_ready(self, metrics):
+        self.metrics_running = False
+
+        self.cpu_value.setText(
+            f'{metrics["cpu_percent"]:.0f}%'
+        )
+        self.mem_value.setText(
+            f'{metrics["memory_percent"]:.0f}%'
+        )
+        self.disk_value.setText(
+            f'{metrics["root_disk_percent"]:.0f}%'
+        )
+
+        self.cpu_history.append(
+            float(metrics["cpu_percent"])
+        )
+        self.memory_history.append(
+            float(metrics["memory_percent"])
+        )
+
+        samples = list(range(len(self.cpu_history)))
+
+        self.cpu_curve.setData(
+            samples, list(self.cpu_history)
+        )
+        self.memory_curve.setData(
+            samples, list(self.memory_history)
+        )
+
+    def on_metrics_error(self, message):
+        self.metrics_running = False
+        self.status.setText("●  METRICS ERROR")
 
     def refresh_diagnostics(self):
         if self.diagnostics_running:
@@ -457,7 +747,6 @@ class DeskOps(QMainWindow):
     def on_diagnostics_ready(self, report):
         self.diagnostics_running = False
         self.last_report = report
-
         metrics = report["metrics"]
 
         self.cpu_value.setText(
@@ -470,50 +759,197 @@ class DeskOps(QMainWindow):
             f'{metrics["root_disk_percent"]:.0f}%'
         )
 
-        warnings = sum(
-            alert["level"] == "warning"
+        warnings = [
+            alert for alert in report["alerts"]
+            if alert["level"] == "warning"
+        ]
+
+        heading = (
+            f"Diagnostics complete — {len(warnings)} warning(s) found."
+            if warnings else
+            "Diagnostics complete — no warnings found."
+        )
+
+        details = "\n".join(
+            f'• {alert["message"]}'
             for alert in report["alerts"]
         )
 
-        if warnings:
-            summary = f"{warnings} warning(s) found."
-        else:
-            summary = "System metrics updated successfully."
+        timestamp = report.get("generated_at", "")
+        timestamp = timestamp[:19].replace("T", " ")
 
-        self.status.setText(
-            f"{summary} "
-            f'Uptime: {metrics["uptime_hours"]} hours.'
+        self.diagnostics_result.setText(
+            f"{heading}\n"
+            f"{details}\n"
+            f'CPU: {metrics["cpu_percent"]:.1f}% | '
+            f'RAM: {metrics["memory_percent"]:.1f}% | '
+            f'Disk: {metrics["root_disk_percent"]:.1f}%\n'
+            f'Uptime: {metrics["uptime_hours"]} hours | '
+            f'Last check: {timestamp}'
         )
 
-        self.cpu_history.append(metrics["cpu_percent"])
-        self.memory_history.append(metrics["memory_percent"])
+        system = report.get("system", {})
+        memory_total = metrics.get("memory_total_bytes", 0)
+        memory_available = metrics.get("memory_available_bytes", 0)
+        disk_total = metrics.get("root_disk_total_bytes", 0)
+        disk_free = metrics.get("root_disk_free_bytes", 0)
 
-        self.cpu_curve.setData(list(self.cpu_history))
-        self.memory_curve.setData(list(self.memory_history))
+        def gib(value):
+            return f"{value / (1024 ** 3):.2f} GiB"
 
-        self.cpu_plot.setMinimumHeight(200)
-        self.memory_plot.setMinimumHeight(200)
+        cpu = metrics.get("cpu_percent", 0)
+        ram = metrics.get("memory_percent", 0)
+        disk = metrics.get("root_disk_percent", 0)
+        uptime = metrics.get("uptime_hours", 0)
+
+        warnings = [
+            alert for alert in report.get("alerts", [])
+            if alert.get("level", "").lower() == "warning"
+        ]
+
+        if cpu >= 90:
+            cpu_status = "HIGH — processor usage may affect responsiveness."
+        elif cpu >= 70:
+            cpu_status = "ELEVATED — check again during normal use."
+        else:
+            cpu_status = "NORMAL — no high CPU usage detected in this sample."
+
+        if ram >= 90:
+            ram_status = "HIGH — available memory is critically limited."
+        elif ram >= 75:
+            ram_status = "ELEVATED — monitor memory consumption."
+        else:
+            ram_status = "NORMAL — memory usage is below the warning threshold."
+
+        if disk >= 90:
+            disk_status = "HIGH — the root filesystem is nearly full."
+        elif disk >= 75:
+            disk_status = "ELEVATED — keep an eye on available disk space."
+        else:
+            disk_status = "NORMAL — root filesystem usage is below the warning threshold."
+
+        generated_at = report.get("generated_at", "Unknown")
+        generated_at = generated_at.replace("T", " ")[:19]
+
+        lines = [
+            "DESKOPS — SYSTEM DIAGNOSTICS",
+            "=" * 42,
+            "SCAN SUMMARY",
+            "-" * 42,
+            (
+                f"Result: {len(warnings)} warning(s) found."
+                if warnings else
+                "Result: No automatic warnings found."
+            ),
+            f"Generated at: {generated_at}",
+            "",
+            "RESOURCE USAGE",
+            "-" * 42,
+            f"CPU:  {cpu:.1f}% — {cpu_status}",
+            f"RAM:  {ram:.1f}% used",
+            f"      Total: {gib(memory_total)}",
+            f"      Available: {gib(memory_available)}",
+            f"      Used: {gib(max(0, memory_total - memory_available))}",
+            f"      Assessment: {ram_status}",
+            f"Root filesystem: {disk:.1f}% used",
+            f"      Total: {gib(disk_total)}",
+            f"      Free: {gib(disk_free)}",
+            f"      Used: {gib(max(0, disk_total - disk_free))}",
+            f"      Assessment: {disk_status}",
+            f"System uptime: {uptime} hour(s)",
+            "",
+            "SYSTEM INFORMATION",
+            "-" * 42,
+            f"Operating system: {system.get('os', 'Unknown')}",
+            f"Platform: {system.get('distribution', 'Unknown')}",
+            f"Kernel: {system.get('kernel', 'Unknown')}",
+            f"Architecture: {system.get('architecture', 'Unknown')}",
+            f"Python version: {system.get('python_version', 'Unknown')}",
+            "",
+            "FINDINGS & ALERTS",
+            "-" * 42,
+        ]
+
+        alerts = report.get("alerts", [])
+        if alerts:
+            for index, alert in enumerate(alerts, start=1):
+                level = alert.get("level", "info").upper()
+                message = alert.get("message", "No details available")
+                lines.append(f"{index}. [{level}] {message}")
+        else:
+            lines.append("No findings were returned by the automatic checks.")
+
+        lines.extend([
+            "",
+            "RECOMMENDED NEXT STEPS",
+            "-" * 42,
+        ])
+
+        recommendations = []
+
+        if cpu >= 70:
+            recommendations.append(
+                "Check the Overview process list for applications "
+                "using significant CPU resources."
+            )
+        if ram >= 75:
+            recommendations.append(
+                "Close applications and browser tabs you do not need, "
+                "then check memory usage again."
+            )
+        if disk >= 75:
+            recommendations.append(
+                "Review disk usage and remove only files you no longer "
+                "need if storage space is running low."
+            )
+        if not recommendations:
+            recommendations.append(
+                "No resource-specific action is indicated by these "
+                "basic thresholds. Continue monitoring during normal use."
+            )
+
+        for index, recommendation in enumerate(recommendations, start=1):
+            lines.append(f"{index}. {recommendation}")
+
+        lines.extend([
+            "",
+            "SCOPE & LIMITATIONS",
+            "-" * 42,
+            "This report summarizes the metrics collected during this scan.",
+            "It does not perform hardware stress tests, temperature checks,",
+            "SMART disk health checks, or system-log analysis.",
+            "A clean result does not guarantee that every component is healthy.",
+        ])
+
+        text_report = "\n".join(lines)
+
+        self.secondary_report_label.setTextFormat(
+            Qt.TextFormat.PlainText
+        )
+        self.secondary_report_label.setWordWrap(True)
+        self.secondary_report_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.secondary_report_label.setText(text_report)
+        self.secondary_report_label.setMinimumHeight(600)
+        self.secondary_report_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding
+        )
+
+        self.reports_status_label.setText(
+            f"Report available · {timestamp}"
+        )
+        self.status.setText("●  SCAN COMPLETE")
 
         self.cpu_history.append(float(metrics["cpu_percent"]))
         self.memory_history.append(float(metrics["memory_percent"]))
 
-        self.cpu_curve.setData(
-            list(range(len(self.cpu_history))),
-            list(self.cpu_history),
-        )
-
-        self.memory_curve.setData(
-         list(range(len(self.memory_history))),
-          list(self.memory_history),
-        )   
+        samples = list(range(len(self.cpu_history)))
+        self.cpu_curve.setData(samples, list(self.cpu_history))
+        self.memory_curve.setData(samples, list(self.memory_history))
 
 
-
-def on_diagnostics_error(self, message):
-    self.diagnostics_running = False
-    self.status.setText(
-        f"Could not complete diagnostics: {message}"
-    )
 
 def main():
     app = QApplication(sys.argv)

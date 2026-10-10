@@ -1,0 +1,9 @@
+Package: deskops
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: DeskOps Developer <carlos.junior.cj16.com>
+Description: Linux system diagnostics and monitoring
+ Desktop application for monitoring CPU, memory, disk usage
+ and running processes, with diagnostic reports.
