@@ -3,14 +3,18 @@ import sys
 import signal
 import json
 import platform
+import psutil
 from pathlib import Path
 
 
 from deskops.workers import (
+    ProcessActionWorker,
     ProcessWorker,
     DiagnosticsWorker,
     MetricsWorker,
 )
+from deskops.core.processes import terminate_process
+from deskops.core.metrics import THRESHOLDS, classify_metric
 from deskops.ui.pages.overview import OverviewPage
 
 from collections import deque
@@ -25,6 +29,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QVBoxLayout,
@@ -237,6 +242,20 @@ def make_card(title, value):
 
 
 
+
+
+class ProcessTableItem(QTableWidgetItem):
+    """Tabela de processos com ordenação numérica e textual correta."""
+
+    def __lt__(self, other):
+        role = Qt.ItemDataRole.UserRole + 1
+        left = self.data(role)
+        right = other.data(role)
+
+        if left is not None and right is not None:
+            return left < right
+
+        return self.text().casefold() < other.text().casefold()
 
 
 class DeskOps(QMainWindow):
@@ -478,7 +497,21 @@ class DeskOps(QMainWindow):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
-        self.pages.addWidget(diagnostics_page)
+
+        diagnostics_scroll = QScrollArea()
+        diagnostics_scroll.setObjectName("pageScroll")
+        diagnostics_scroll.setWidgetResizable(True)
+        diagnostics_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        diagnostics_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        diagnostics_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        diagnostics_scroll.setWidget(diagnostics_page)
+
+        self.pages.addWidget(diagnostics_scroll)
+
 
         reports_page, reports_labels = build_page(
             "Reports",
@@ -492,6 +525,171 @@ class DeskOps(QMainWindow):
         )
         self.reports_status_label = reports_labels[0]
         self.pages.addWidget(reports_page)
+
+
+        # Process Manager
+        process_manager_page = QWidget()
+        process_manager_page.setStyleSheet("""
+            QWidget { background: #0c1018; color: #e7edf8; }
+            QTableWidget#processManagerTable {
+                background: #111722;
+                alternate-background-color: #151d2a;
+                color: #dce5f5;
+                border: 1px solid #29364a;
+                border-radius: 8px;
+                gridline-color: transparent;
+                selection-background-color: #263c60;
+                selection-color: #ffffff;
+            }
+            QTableWidget#processManagerTable::item {
+                padding: 5px;
+                border: none;
+            }
+            QTableWidget#processManagerTable QHeaderView::section {
+                background: #171f2d;
+                color: #91a2bd;
+                border: none;
+                padding: 9px;
+                font-size: 10px;
+                font-weight: 800;
+            }
+        """)
+
+        process_layout = QVBoxLayout(process_manager_page)
+        process_layout.setContentsMargins(32, 30, 32, 30)
+        process_layout.setSpacing(14)
+
+        process_heading = QLabel("Process Manager")
+        process_heading.setStyleSheet(
+            "color: #f0f4ff; font-size: 28px; font-weight: 800;"
+        )
+        process_description = QLabel(
+            "Inspect running processes and manage processes owned by your user."
+        )
+        process_description.setWordWrap(True)
+        process_description.setStyleSheet("color: #8d9bb1; font-size: 12px;")
+        process_layout.addWidget(process_heading)
+        process_layout.addWidget(process_description)
+
+        self.process_manager_status = QLabel(
+            "Ready. Refresh the list to inspect running processes."
+        )
+        self.process_manager_status.setWordWrap(True)
+        self.process_manager_status.setStyleSheet(
+            "color: #91aaff; font-size: 11px; padding: 4px 0;"
+        )
+        process_layout.addWidget(self.process_manager_status)
+
+        self.process_manager_search = QLineEdit()
+        self.process_manager_search.setObjectName("processManagerSearch")
+        self.process_manager_search.setPlaceholderText(
+            "Search by PID, process name, or user..."
+        )
+        self.process_manager_search.setClearButtonEnabled(True)
+        self.process_manager_search.setStyleSheet("""
+            QLineEdit#processManagerSearch {
+                background: #111722;
+                color: #e7edf8;
+                border: 1px solid #29364a;
+                border-radius: 8px;
+                padding: 10px 12px;
+                selection-background-color: #263c60;
+            }
+            QLineEdit#processManagerSearch:focus {
+                border: 1px solid #718bd8;
+            }
+        """)
+        self.process_manager_search.textChanged.connect(
+            self.filter_process_manager
+        )
+        process_layout.addWidget(self.process_manager_search)
+
+        self.process_manager_table = QTableWidget(0, 5)
+        self.process_manager_table.setObjectName("processManagerTable")
+        self.process_manager_table.setHorizontalHeaderLabels([
+            "PID", "PROCESS", "CPU %", "MEMORY %", "USER"
+        ])
+        self.process_manager_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.process_manager_table.verticalHeader().setVisible(False)
+        self.process_manager_table.verticalHeader().setDefaultSectionSize(32)
+        self.process_manager_table.setAlternatingRowColors(True)
+        self.process_manager_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.process_manager_table.setSelectionMode(
+            QTableWidget.SelectionMode.SingleSelection
+        )
+        self.process_manager_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.process_manager_table.setShowGrid(False)
+        self.process_manager_table.setSortingEnabled(True)
+        self.process_manager_table.setMinimumHeight(300)
+        self.process_manager_table.itemSelectionChanged.connect(
+            self.show_selected_process_details
+        )
+        process_layout.addWidget(self.process_manager_table, 1)
+
+        self.process_manager_details = QLabel(
+            "Select a process to inspect its details."
+        )
+        self.process_manager_details.setWordWrap(True)
+        self.process_manager_details.setStyleSheet("""
+            background: #141b27;
+            border: 1px solid #29364a;
+            border-radius: 8px;
+            padding: 12px;
+            color: #c6d2e5;
+        """)
+        process_layout.addWidget(self.process_manager_details)
+
+        process_buttons = QHBoxLayout()
+        process_buttons.setSpacing(10)
+
+        self.process_manager_refresh_button = QPushButton("Refresh list")
+        self.process_manager_refresh_button.setObjectName("primaryButton")
+        self.process_manager_refresh_button.clicked.connect(
+            self.refresh_process_manager
+        )
+
+        self.process_manager_terminate_button = QPushButton("Terminate")
+        self.process_manager_terminate_button.clicked.connect(
+            self.terminate_selected_process
+        )
+
+        self.process_manager_kill_button = QPushButton("Force kill")
+        self.process_manager_kill_button.setStyleSheet("""
+            QPushButton {
+                background: #3a2028;
+                color: #ffb4bd;
+                border: 1px solid #75404b;
+                border-radius: 7px;
+                padding: 9px 14px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background: #512832; }
+        """)
+        self.process_manager_kill_button.clicked.connect(
+            self.force_kill_selected_process
+        )
+        self.process_manager_kill_button.setEnabled(False)
+        self.process_manager_kill_button.setToolTip(
+            "Available only if normal termination times out."
+        )
+
+        process_buttons.addWidget(self.process_manager_refresh_button)
+        process_buttons.addWidget(self.process_manager_terminate_button)
+        process_buttons.addWidget(self.process_manager_kill_button)
+        process_buttons.addStretch()
+        process_layout.addLayout(process_buttons)
+
+        self.process_manager_scan_running = False
+        self.process_manager_has_loaded = False
+        self.process_manager_action_running = False
+        self.process_manager_force_candidate = None
+        self.pages.addWidget(process_manager_page)
 
         settings_page = QWidget()
         settings_page.setStyleSheet(
@@ -632,6 +830,7 @@ class DeskOps(QMainWindow):
             ("▦", "Hardware"),
             ("⌁", "Diagnostics"),
             ("≡", "Reports"),
+            ("⚡", "Process Manager"),
             ("⚙", "Settings"),
         ]
 
@@ -677,6 +876,7 @@ class DeskOps(QMainWindow):
         self.cpu_value = self.overview.cpu_value
         self.mem_value = self.overview.mem_value
         self.disk_value = self.overview.disk_value
+        self.temp_value = self.overview.temp_value
         self.cpu_plot = self.overview.cpu_plot
         self.memory_plot = self.overview.memory_plot
         self.cpu_curve = self.overview.cpu_curve
@@ -909,6 +1109,14 @@ class DeskOps(QMainWindow):
             self.pages.setCurrentIndex(index)
             for i, button in enumerate(self.nav_buttons):
                 button.setChecked(i == index)
+
+            # Carrega os processos automaticamente no primeiro acesso.
+            if (
+                index == 4
+                and not self.process_manager_has_loaded
+                and not self.process_manager_scan_running
+            ):
+                self.refresh_process_manager()
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showMaximized()
@@ -968,6 +1176,396 @@ class DeskOps(QMainWindow):
             )
 
     
+    def refresh_process_manager(self):
+        if (
+            self.process_manager_scan_running
+            or self.process_manager_action_running
+        ):
+            return
+
+        self.process_manager_force_candidate = None
+        self._update_force_button_state()
+        self.process_manager_scan_running = True
+        self.process_manager_refresh_button.setEnabled(False)
+        self.process_manager_status.setText("Scanning running processes...")
+
+        worker = ProcessWorker(limit=1000)
+        self.process_manager_worker = worker
+        worker.signals.finished.connect(self.on_process_manager_ready)
+        worker.signals.error.connect(self.on_process_manager_error)
+        self.thread_pool.start(worker)
+
+    def on_process_manager_ready(self, processes):
+        self.process_manager_scan_running = False
+        self.process_manager_has_loaded = True
+        self.process_manager_refresh_button.setEnabled(True)
+
+        table = self.process_manager_table
+
+        # Preserve the selected PID when it still exists after refresh.
+        selected_pid = None
+        current_row = table.currentRow()
+        if current_row >= 0 and table.item(current_row, 0) is not None:
+            selected_pid = table.item(current_row, 0).text()
+
+        table.setSortingEnabled(False)
+        table.setRowCount(len(processes))
+
+        sort_role = Qt.ItemDataRole.UserRole + 1
+
+        for row, proc in enumerate(processes):
+            values = [
+                str(proc["pid"]),
+                proc["name"],
+                f'{proc["cpu_percent"]:.1f}',
+                f'{proc["memory_percent"]:.2f}',
+                proc["username"],
+            ]
+            sort_values = [
+                int(proc["pid"]),
+                str(proc["name"]).casefold(),
+                float(proc["cpu_percent"]),
+                float(proc["memory_percent"]),
+                str(proc["username"]).casefold(),
+            ]
+
+            for column, value in enumerate(values):
+                item = ProcessTableItem(value)
+                item.setData(sort_role, sort_values[column])
+
+                if column == 0:
+                    item.setData(
+                        Qt.ItemDataRole.UserRole,
+                        proc.get("create_time"),
+                    )
+
+                table.setItem(row, column, item)
+
+        table.setSortingEnabled(True)
+        self.filter_process_manager(
+            self.process_manager_search.text()
+        )
+
+        # Restore the selection, or choose the first visible process.
+        target_row = -1
+        if selected_pid is not None:
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is not None and item.text() == selected_pid:
+                    if not table.isRowHidden(row):
+                        target_row = row
+                    break
+
+        if target_row < 0:
+            for row in range(table.rowCount()):
+                if not table.isRowHidden(row):
+                    target_row = row
+                    break
+
+        table.setCurrentCell(target_row, 0) if target_row >= 0 else table.clearSelection()
+
+        pending_status = getattr(
+            self, "process_manager_pending_status", None
+        )
+        if pending_status:
+            self.process_manager_status.setText(pending_status)
+            self.process_manager_pending_status = None
+        else:
+            self.process_manager_status.setText(
+                f"{len(processes)} processes loaded."
+            )
+
+        self.show_selected_process_details()
+
+    def filter_process_manager(self, query):
+        query = query.strip().casefold()
+        table = self.process_manager_table
+        visible_count = 0
+
+        for row in range(table.rowCount()):
+            matches = not query or any(
+                query in (table.item(row, column).text().casefold())
+                for column in range(table.columnCount())
+                if table.item(row, column) is not None
+            )
+            table.setRowHidden(row, not matches)
+            if matches:
+                visible_count += 1
+
+        if not self.process_manager_scan_running:
+            total = table.rowCount()
+            if query:
+                self.process_manager_status.setText(
+                    f"{visible_count} of {total} processes match "
+                    f'"{query}".'
+                )
+            else:
+                self.process_manager_status.setText(
+                    f"{total} processes loaded."
+                )
+
+    def on_process_manager_error(self, message):
+        self.process_manager_scan_running = False
+        self.process_manager_refresh_button.setEnabled(True)
+
+        pending_status = getattr(
+            self, "process_manager_pending_status", None
+        )
+        if pending_status:
+            self.process_manager_status.setText(
+                f"{pending_status} Refresh failed: {message}"
+            )
+            self.process_manager_pending_status = None
+        else:
+            self.process_manager_status.setText(
+                f"Could not inspect processes: {message}"
+            )
+
+    def show_selected_process_details(self):
+        row = self.process_manager_table.currentRow()
+        if row < 0:
+            self.process_manager_details.setText(
+                "Select a process to inspect its details."
+            )
+            self._update_force_button_state()
+            return
+
+        table = self.process_manager_table
+        pid = table.item(row, 0).text()
+        name = table.item(row, 1).text()
+        cpu = table.item(row, 2).text()
+        memory = table.item(row, 3).text()
+        user = table.item(row, 4).text()
+
+        self.process_manager_details.setText(
+            f"Process: {name}   |   PID: {pid}   |   User: {user}\\n"
+            f"CPU: {cpu}%   |   Memory: {memory}%"
+        )
+        self._update_force_button_state()
+
+    def _update_force_button_state(self):
+        candidate = self.process_manager_force_candidate
+        enabled = False
+
+        if (
+            candidate is not None
+            and not self.process_manager_action_running
+            and not self.process_manager_scan_running
+        ):
+            row = self.process_manager_table.currentRow()
+            if row >= 0:
+                pid_item = self.process_manager_table.item(row, 0)
+                try:
+                    selected_pid = int(pid_item.text())
+                    selected_ctime = pid_item.data(Qt.ItemDataRole.UserRole)
+                    enabled = (
+                        selected_pid == candidate["pid"]
+                        and selected_ctime is not None
+                        and abs(
+                            float(selected_ctime)
+                            - float(candidate["create_time"])
+                        ) <= 0.01
+                    )
+                except (TypeError, ValueError):
+                    enabled = False
+
+        self.process_manager_kill_button.setEnabled(enabled)
+
+    def terminate_selected_process(self):
+        if (
+            self.process_manager_scan_running
+            or self.process_manager_action_running
+        ):
+            QMessageBox.information(
+                self,
+                "Please wait",
+                "Wait for the current process operation to finish.",
+            )
+            return
+
+        row = self.process_manager_table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self, "No process selected",
+                "Select a process from the table first.",
+            )
+            return
+
+        table = self.process_manager_table
+        pid_item = table.item(row, 0)
+        pid = int(pid_item.text())
+        name = table.item(row, 1).text()
+        expected_create_time = pid_item.data(Qt.ItemDataRole.UserRole)
+
+        answer = QMessageBox.question(
+            self,
+            "Terminate process?",
+            f"Ask '{name}' (PID {pid}) to terminate normally?\\n\\n"
+            "If it does not exit within 3 seconds, you can decide "
+            "whether to force-kill it.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self.process_manager_force_candidate = None
+        self._start_process_action(
+            pid, name, expected_create_time, force=False
+        )
+
+    def force_kill_selected_process(self):
+        candidate = self.process_manager_force_candidate
+        if candidate is None:
+            QMessageBox.information(
+                self,
+                "Force kill unavailable",
+                "Try normal termination first. Force kill is only "
+                "available if that attempt times out.",
+            )
+            return
+
+        row = self.process_manager_table.currentRow()
+        if row < 0:
+            self._update_force_button_state()
+            return
+
+        pid_item = self.process_manager_table.item(row, 0)
+        try:
+            selected_pid = int(pid_item.text())
+            selected_ctime = pid_item.data(Qt.ItemDataRole.UserRole)
+        except (TypeError, ValueError):
+            self._update_force_button_state()
+            return
+
+        if (
+            selected_pid != candidate["pid"]
+            or selected_ctime is None
+            or abs(float(selected_ctime) - float(candidate["create_time"])) > 0.01
+        ):
+            self._update_force_button_state()
+            QMessageBox.information(
+                self,
+                "Different process selected",
+                "Select the same process that failed to terminate normally.",
+            )
+            return
+
+        if self.process_manager_action_running:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Force-kill process?",
+            f"Force-kill '{candidate['name']}' "
+            f"(PID {candidate['pid']})?\\n\\n"
+            "This does not allow the process to shut down cleanly. "
+            "Unsaved work may be lost.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._start_process_action(
+            candidate["pid"],
+            candidate["name"],
+            candidate["create_time"],
+            force=True,
+        )
+
+    def _start_process_action(self, pid, name, create_time, force=False):
+        self.process_manager_action_running = True
+        self.process_manager_terminate_button.setEnabled(False)
+        self.process_manager_kill_button.setEnabled(False)
+        self.process_manager_refresh_button.setEnabled(False)
+
+        action = "Force-killing" if force else "Requesting normal termination of"
+        self.process_manager_status.setText(
+            f"{action} {name} (PID {pid})..."
+        )
+
+        worker = ProcessActionWorker(pid, create_time, force=force, name=name)
+        self.process_action_worker = worker
+        worker.signals.finished.connect(self.on_process_action_finished)
+        self.thread_pool.start(worker)
+
+    def on_process_action_finished(self, result):
+        self.process_manager_action_running = False
+        self.process_manager_terminate_button.setEnabled(True)
+        self.process_manager_refresh_button.setEnabled(True)
+
+        pid = result["pid"]
+        force = result["force"]
+
+        if result["status"] == "success":
+            self.process_manager_force_candidate = None
+            name = result.get("name", f"PID {pid}")
+            action = "Force-killed" if force else "Terminated"
+            self.process_manager_pending_status = (
+                f"{action} '{name}' (PID {pid})."
+            )
+            self._update_force_button_state()
+            self.refresh_process_manager()
+            return
+
+        if result["status"] == "already_exited":
+            self.process_manager_force_candidate = None
+            name = result.get("name", f"PID {pid}")
+            self.process_manager_pending_status = (
+                f"'{name}' (PID {pid}) had already exited."
+            )
+            self._update_force_button_state()
+            self.refresh_process_manager()
+            return
+
+        if result.get("error_type") == "TimeoutExpired" and not force:
+            create_time = result.get("create_time")
+
+            if create_time is None:
+                self.process_manager_force_candidate = None
+                self.process_manager_status.setText(
+                    f"Process (PID {pid}) timed out; identity unverified."
+                )
+                QMessageBox.warning(
+                    self,
+                    "Process identity unavailable",
+                    "The process did not exit within 3 seconds, but "
+                    "its identity could not be verified. Force kill "
+                    "is unavailable for safety.",
+                )
+                self._update_force_button_state()
+                return
+
+            self.process_manager_force_candidate = {
+                "pid": pid,
+                "name": result["name"],
+                "create_time": create_time,
+            }
+            self._update_force_button_state()
+            self.process_manager_status.setText(
+                f"Process (PID {pid}) did not exit in time. "
+                "Force kill may be available if its identity matches."
+            )
+            QMessageBox.warning(
+                self,
+                "Process still running",
+                f"PID {pid} did not exit within 3 seconds.\n\n"
+                "Force kill is available only while the selected "
+                "process matches the original identity. Unsaved work "
+                "may be lost.",
+            )
+            return
+
+        self.process_manager_force_candidate = None
+        self._update_force_button_state()
+        QMessageBox.warning(
+            self,
+            "Process action failed",
+            f"Could not act on PID {pid}.\n\n"
+            f"{result.get('error', 'Unknown error')}",
+        )
+
     def refresh_processes(self):
         # Impede que uma nova coleta comece antes da anterior terminar.
         if self.process_scan_running:
@@ -977,6 +1575,7 @@ class DeskOps(QMainWindow):
         self.status.setText("●  SCANNING")
 
         worker = ProcessWorker()
+        self.process_worker = worker
         worker.signals.finished.connect(self.on_processes_ready)
         worker.signals.error.connect(self.on_processes_error)
 
@@ -1022,6 +1621,7 @@ class DeskOps(QMainWindow):
         self.metrics_running = True
 
         worker = MetricsWorker()
+        self.metrics_worker = worker
         worker.signals.finished.connect(
             self.on_metrics_ready
         )
@@ -1042,6 +1642,12 @@ class DeskOps(QMainWindow):
         )
         self.disk_value.setText(
             f'{metrics["root_disk_percent"]:.0f}%'
+        )
+
+        temperature = metrics.get("cpu_temperature_c")
+        self.temp_value.setText(
+            f"{temperature:.0f}°C"
+            if temperature is not None else "Unavailable"
         )
 
         self.cpu_history.append(
@@ -1071,6 +1677,7 @@ class DeskOps(QMainWindow):
         self.diagnostics_running = True
 
         worker = DiagnosticsWorker()
+        self.diagnostics_worker = worker
         worker.signals.finished.connect(
             self.on_diagnostics_ready
         )
@@ -1095,16 +1702,28 @@ class DeskOps(QMainWindow):
         self.disk_value.setText(
             f'{metrics["root_disk_percent"]:.0f}%'
         )
+        temperature = metrics.get("cpu_temperature_c")
+        self.temp_value.setText(
+            f"{temperature:.0f}°C"
+            if temperature is not None else "Unavailable"
+        )
 
-        warnings = [
-            alert for alert in report["alerts"]
-            if alert["level"] == "warning"
+        findings = [
+            alert for alert in report.get("alerts", [])
+            if alert.get("level", "").lower()
+            in ("warning", "critical")
         ]
 
+        critical_count = sum(
+            alert.get("level", "").lower() == "critical"
+            for alert in findings
+        )
+
         heading = (
-            f"Diagnostics complete — {len(warnings)} warning(s) found."
-            if warnings else
-            "Diagnostics complete — no warnings found."
+            f"Diagnostics complete — {len(findings)} finding(s) found "
+            f"({critical_count} critical)."
+            if findings else
+            "Diagnostics complete — no automatic findings."
         )
 
         details = "\n".join(
@@ -1115,12 +1734,19 @@ class DeskOps(QMainWindow):
         timestamp = report.get("generated_at", "")
         timestamp = timestamp[:19].replace("T", " ")
 
+        temperature = metrics.get("cpu_temperature_c")
+        temperature_text = (
+            f"{temperature:.1f}°C"
+            if temperature is not None else "Unavailable"
+        )
+
         self.diagnostics_result.setText(
             f"{heading}\n"
             f"{details}\n"
             f'CPU: {metrics["cpu_percent"]:.1f}% | '
             f'RAM: {metrics["memory_percent"]:.1f}% | '
             f'Disk: {metrics["root_disk_percent"]:.1f}%\n'
+            f'Temperature: {temperature_text} | '
             f'Uptime: {metrics["uptime_hours"]} hours | '
             f'Last check: {timestamp}'
         )
@@ -1138,32 +1764,70 @@ class DeskOps(QMainWindow):
         ram = metrics.get("memory_percent", 0)
         disk = metrics.get("root_disk_percent", 0)
         uptime = metrics.get("uptime_hours", 0)
+        temperature = metrics.get("cpu_temperature_c")
+        temperature_text = (
+            f"{temperature:.1f}°C"
+            if temperature is not None else "Unavailable"
+        )
+        sensor = metrics.get("temperature_sensor")
+
+        temperature_state = classify_metric(
+            temperature, *THRESHOLDS["cpu_temperature_c"]
+        )
+
+        temperature_statuses = {
+            "unavailable": (
+                "UNAVAILABLE — no CPU temperature reading was available."
+            ),
+            "critical": (
+                "CRITICAL — CPU temperature reached the critical threshold."
+            ),
+            "warning": (
+                "WARNING — CPU temperature reached the attention threshold."
+            ),
+            "normal": (
+                "NORMAL — CPU temperature is below the attention threshold."
+            ),
+        }
+        temperature_status = temperature_statuses[temperature_state]
 
         warnings = [
             alert for alert in report.get("alerts", [])
             if alert.get("level", "").lower() == "warning"
         ]
 
-        if cpu >= 90:
-            cpu_status = "HIGH — processor usage may affect responsiveness."
-        elif cpu >= 70:
-            cpu_status = "ELEVATED — check again during normal use."
-        else:
-            cpu_status = "NORMAL — no high CPU usage detected in this sample."
+        cpu_state = classify_metric(
+            cpu, *THRESHOLDS["cpu_percent"]
+        )
+        ram_state = classify_metric(
+            ram, *THRESHOLDS["memory_percent"]
+        )
+        disk_state = classify_metric(
+            disk, *THRESHOLDS["root_disk_percent"]
+        )
 
-        if ram >= 90:
-            ram_status = "HIGH — available memory is critically limited."
-        elif ram >= 75:
-            ram_status = "ELEVATED — monitor memory consumption."
-        else:
-            ram_status = "NORMAL — memory usage is below the warning threshold."
+        cpu_statuses = {
+            "critical": "CRITICAL — processor usage may affect responsiveness.",
+            "warning": "WARNING — check CPU usage again during normal use.",
+            "normal": "NORMAL — no elevated CPU usage detected in this sample.",
+            "unavailable": "UNAVAILABLE — CPU usage could not be assessed.",
+        }
+        ram_statuses = {
+            "critical": "CRITICAL — available memory is very limited.",
+            "warning": "WARNING — monitor memory consumption.",
+            "normal": "NORMAL — memory usage is below the attention threshold.",
+            "unavailable": "UNAVAILABLE — memory usage could not be assessed.",
+        }
+        disk_statuses = {
+            "critical": "CRITICAL — the root filesystem is nearly full.",
+            "warning": "WARNING — monitor available disk space.",
+            "normal": "NORMAL — disk usage is below the attention threshold.",
+            "unavailable": "UNAVAILABLE — disk usage could not be assessed.",
+        }
 
-        if disk >= 90:
-            disk_status = "HIGH — the root filesystem is nearly full."
-        elif disk >= 75:
-            disk_status = "ELEVATED — keep an eye on available disk space."
-        else:
-            disk_status = "NORMAL — root filesystem usage is below the warning threshold."
+        cpu_status = cpu_statuses[cpu_state]
+        ram_status = ram_statuses[ram_state]
+        disk_status = disk_statuses[disk_state]
 
         generated_at = report.get("generated_at", "Unknown")
         generated_at = generated_at.replace("T", " ")[:19]
@@ -1193,6 +1857,13 @@ class DeskOps(QMainWindow):
             f"      Free: {gib(disk_free)}",
             f"      Used: {gib(max(0, disk_total - disk_free))}",
             f"      Assessment: {disk_status}",
+            f"CPU temperature: {temperature_text}",
+            (
+                f"Temperature sensor: {sensor}"
+                if sensor else
+                "Temperature sensor: Not identified"
+            ),
+            f"Temperature assessment: {temperature_status}",
             f"System uptime: {uptime} hour(s)",
             "",
             "SYSTEM INFORMATION",
@@ -1253,8 +1924,9 @@ class DeskOps(QMainWindow):
             "SCOPE & LIMITATIONS",
             "-" * 42,
             "This report summarizes the metrics collected during this scan.",
-            "It does not perform hardware stress tests, temperature checks,",
-            "SMART disk health checks, or system-log analysis.",
+            "Temperature readings are collected when supported sensors are available.",
+            "This scan does not perform thermal stress tests, SMART disk health checks,",
+            "or system-log analysis.",
             "A clean result does not guarantee that every component is healthy.",
         ])
 

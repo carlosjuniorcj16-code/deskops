@@ -316,8 +316,12 @@ class OverviewPage(QWidget):
         card_disk, self.disk_value = make_card(
             "Storage", "--", AMBER, "▣", "Root filesystem utilization"
         )
+        card_temp, self.temp_value = make_card(
+            "Temperature", "Unavailable", "#fb7185", "°",
+            "Highest CPU core temperature"
+        )
 
-        for card in (card_cpu, card_mem, card_disk):
+        for card in (card_cpu, card_mem, card_disk, card_temp):
             cards.addWidget(card, 1)
 
         page.addLayout(cards)
